@@ -49,8 +49,8 @@ def play():
 
 @app.route("/")
 def index():
-    return send_from_directory(".", "tesst.html")
+    # UPDATED: Changed from 'tesst.html' to 'index.html'
+    return send_from_directory(".", "index.html")
 
 if __name__ == "__main__":
-    # Important: bind to 0.0.0.0 for Render
     app.run(host="0.0.0.0", port=port)
