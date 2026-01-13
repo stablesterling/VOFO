@@ -3,6 +3,9 @@ from flask_cors import CORS
 from yt_dlp import YoutubeDL
 import os
 
+# Render uses the 'PORT' environment variable
+port = int(os.environ.get("PORT", 5000))
+
 app = Flask(__name__, static_folder=".", static_url_path="")
 CORS(app)
 
@@ -12,12 +15,7 @@ HEADERS = {
 
 def soundcloud_search(query):
     try:
-        ydl_opts = {
-            "quiet": True,
-            "noplaylist": True,
-            "extract_flat": True,
-            "http_headers": HEADERS
-        }
+        ydl_opts = {"quiet": True, "noplaylist": True, "extract_flat": True, "http_headers": HEADERS}
         with YoutubeDL(ydl_opts) as ydl:
             search_results = ydl.extract_info(f"scsearch10:{query}", download=False)
             results = []
@@ -27,12 +25,10 @@ def soundcloud_search(query):
                         "id": entry.get("url"),
                         "title": entry.get("title"),
                         "artist": entry.get("uploader") or "SoundCloud Artist",
-                        # FETCHING THE THUMBNAIL HERE
                         "thumbnail": entry.get("thumbnail") or "https://placehold.co/500x500?text=No+Cover+Art"
                     })
             return results
     except Exception as e:
-        print(f"Search error: {e}")
         return []
 
 @app.route("/api/search")
@@ -56,4 +52,5 @@ def index():
     return send_from_directory(".", "tesst.html")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Important: bind to 0.0.0.0 for Render
+    app.run(host="0.0.0.0", port=port)
