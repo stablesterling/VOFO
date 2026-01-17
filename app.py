@@ -1,34 +1,34 @@
 import os
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from yt_dlp import YoutubeDL
 
+# Initialize Flask with the current directory as the static folder
 app = Flask(__name__, static_folder=".", static_url_path="")
 
-# --- CONFIGURATION FIXES ---
+# --- CONFIGURATION ---
 app.config.update(
-    SECRET_KEY='vofo_ultra_secret_2026',
+    SECRET_KEY=os.environ.get('SECRET_KEY', 'vofo_ultra_secret_2026'),
     SQLALCHEMY_DATABASE_URI='sqlite:///vofo.db',
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SESSION_COOKIE_SAMESITE="Lax", # Helps with auth persistence
+    SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True
 )
 
-# Crucial: supports_credentials=True allows the login cookie to be sent
 CORS(app, supports_credentials=True)
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
-port = int(os.environ.get("PORT", 5000))
+login_manager.login_view = 'index'
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
-# --- Database Models ---
+# --- Models ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -47,7 +47,11 @@ class LikedTrack(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- Auth Routes ---
+# --- Routes ---
+@app.route("/")
+def index():
+    return send_from_directory(".", "index.html")
+
 @app.route("/api/auth/register", methods=["POST"])
 def register():
     data = request.json
@@ -79,71 +83,44 @@ def status():
         return jsonify({"logged_in": True, "username": current_user.username})
     return jsonify({"logged_in": False})
 
-# --- Music & Search ---
-def soundcloud_search(query):
-    try:
-        ydl_opts = {
-            "quiet": True, 
-            "noplaylist": True, 
-            "extract_flat": True, 
-            "http_headers": HEADERS
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            r = ydl.extract_info(f"scsearch10:{query}", download=False)
-            results = []
-            for e in r.get("entries", []):
-                if not e: continue
-                results.append({
-                    "id": e.get("url"),
-                    "title": e.get("title"),
-                    "artist": e.get("uploader") or "SoundCloud Artist",
-                    "thumbnail": e.get("thumbnail") or "https://placehold.co/50x50?text=No+Cover"
-                })
-            return results
-    except: return []
-
 @app.route("/api/search")
 @login_required
 def search():
     q = request.args.get("q")
-    return jsonify(soundcloud_search(q)) if q else jsonify([])
+    if not q: return jsonify([])
+    try:
+        ydl_opts = {"quiet": True, "noplaylist": True, "extract_flat": True, "http_headers": HEADERS}
+        with YoutubeDL(ydl_opts) as ydl:
+            r = ydl.extract_info(f"scsearch10:{q}", download=False)
+            results = [{
+                "id": e.get("url"),
+                "title": e.get("title"),
+                "artist": e.get("uploader") or "SoundCloud Artist",
+                "thumbnail": e.get("thumbnail") or "https://placehold.co/50x50"
+            } for e in r.get("entries", []) if e]
+            return jsonify(results)
+    except: return jsonify([])
 
-# --- IMPROVED PLAYBACK FUNCTION ---
 @app.route("/api/play", methods=["POST"])
 @login_required
 def play():
     track_url = request.json.get("url")
     try:
-        ydl_opts = {
-            # Use the format selection that works from your 2nd backend
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
-            "quiet": True,
-            "http_headers": HEADERS,
-            "nocheckcertificate": True # Added for extra reliability
-        }
+        ydl_opts = {"format": "bestaudio", "quiet": True, "http_headers": HEADERS}
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(track_url, download=False)
-            
-            # Detect if it's an HLS stream (common on SoundCloud)
-            is_hls = ".m3u8" in info["url"] or info.get("protocol") == "m3u8_native"
-            
             return jsonify({
                 "stream_url": info["url"],
-                "ext": info.get("ext", ""),
-                "is_hls": is_hls
+                "is_hls": ".m3u8" in info["url"] or info.get("protocol") == "m3u8_native"
             })
     except Exception as e:
-        print(f"Playback Error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --- Likes Logic ---
 @app.route("/api/library")
 @login_required
 def get_library():
     likes = LikedTrack.query.filter_by(user_id=current_user.id).all()
-    return jsonify([{
-        "id": l.track_id, "title": l.title, "artist": l.artist, "thumbnail": l.thumbnail
-    } for l in likes])
+    return jsonify([{"id": l.track_id, "title": l.title, "artist": l.artist, "thumbnail": l.thumbnail} for l in likes])
 
 @app.route("/api/like", methods=["POST"])
 @login_required
@@ -154,20 +131,14 @@ def toggle_like():
         db.session.delete(existing)
         db.session.commit()
         return jsonify({"status": "unliked"})
-    
-    new_like = LikedTrack(
-        track_id=data['id'], title=data['title'], artist=data['artist'],
-        thumbnail=data['thumbnail'], user_id=current_user.id
-    )
+    new_like = LikedTrack(track_id=data['id'], title=data['title'], artist=data['artist'], thumbnail=data['thumbnail'], user_id=current_user.id)
     db.session.add(new_like)
     db.session.commit()
     return jsonify({"status": "liked"})
 
-@app.route("/")
-def index():
-    return send_from_directory(".", "index.html")
-
+# Create DB and Run
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
