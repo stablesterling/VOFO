@@ -1,4 +1,6 @@
 flask
+flask-sqlalchemy
 flask-cors
+flask-login
 yt-dlp
 gunicorn
